@@ -23,7 +23,6 @@ class CaffeParamProvider():
         # tensorflow [filter_height, filter_width, in_channels, out_channels]
         #             2              3             1            0
         return k.transpose((2, 3, 1, 0))
-        return k
 
     def bn_gamma(self, name):
         return self.caffe_net.params[name][0].data
@@ -233,14 +232,14 @@ def convert(graph, img, img_p, layers):
     elif layers == 152:
         num_blocks=[3, 8, 36, 3]
 
-    with tf.device('/cpu:0'):
-        images = tf.placeholder("float32", [None, 224, 224, 3], name="images")
-        logits = resnet.inference(images,
-                                  is_training=False,
-                                  num_blocks=num_blocks,
-                                  preprocess=True,
-                                  bottleneck=True)
-        prob = tf.nn.softmax(logits, name='prob')
+    #with tf.device('/gpu:0'):
+    images = tf.placeholder("float32", [None, 224, 224, 3], name="images")
+    logits = resnet.inference(images,
+                              is_training=False,
+                              num_blocks=num_blocks,
+                              preprocess=True,
+                              bottleneck=True)
+    prob = tf.nn.softmax(logits, name='prob')
 
     # We write the metagraph first to avoid adding a bunch of
     # assign ops that are used to set variables from caffe.
@@ -318,7 +317,7 @@ def main(_):
     print img
     img_p = preprocess(img)
 
-    for layers in [50, 101, 152]:
+    for layers in [152]:
         g = tf.Graph()
         with g.as_default():
             print "CONVERT", layers

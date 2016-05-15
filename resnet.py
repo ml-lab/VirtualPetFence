@@ -139,7 +139,18 @@ def stack(x, num_blocks, filters_internal, bottleneck, is_training, stride):
                        stride=s)
     return x
 
-def block(x, filters_internal, is_training, stride, bottleneck):
+def _conv(x, filters_out, ksize=3, stride=1):
+    filters_in = x.get_shape()[-1]
+    shape = [ksize, ksize, filters_in, filters_out]
+    initializer = tf.truncated_normal_initializer(stddev=CONV_WEIGHT_STDDEV)
+    weights = _get_variable('weights', shape=shape, dtype='float',
+                            initializer=initializer,
+                            weight_decay=CONV_WEIGHT_DECAY)
+    return tf.nn.conv2d(x, weights, [1, stride, stride, 1], padding='SAME')
+
+
+
+def block(x, filters_internal, is_training, stride, bottleneck, _conv=_conv):
     filters_in = x.get_shape()[-1]
 
     # Note: filters_out isn't how many filters are outputed. 
@@ -181,13 +192,13 @@ def block(x, filters_internal, is_training, stride, bottleneck):
         if filters_out != filters_in or stride != 1:
             shortcut = _conv(shortcut, filters_out, ksize=1, stride=stride)
             shortcut = _bn(shortcut, is_training)
-
     return _relu(x + shortcut)
+
 
 def _relu(x):
     return tf.nn.relu(x)
    
-def _bn(x, is_training):
+def _bn(x, is_training, trainable=False):
     x_shape = x.get_shape()
     params_shape = x_shape[-1:]
     axis = list(range(len(x_shape) - 1))
@@ -198,11 +209,11 @@ def _bn(x, is_training):
     moving_mean = _get_variable('moving_mean',
                                 params_shape,
                                 initializer=tf.zeros_initializer,
-                                trainable=False)
+                                trainable=trainable)
     moving_variance = _get_variable('moving_variance',
                                     params_shape,
                                     initializer=tf.ones_initializer,
-                                    trainable=False)
+                                    trainable=trainable)
 
     # These ops will only be preformed when training.
     mean, variance = tf.nn.moments(x, axis)
@@ -248,16 +259,7 @@ def _get_variable(name, shape, initializer, weight_decay=0.0, dtype='float', tra
                            regularizer=regularizer, collections=collections,
                            trainable=trainable)
 
-def _conv(x, filters_out, ksize=3, stride=1):
-    filters_in = x.get_shape()[-1]
-    shape = [ksize, ksize, filters_in, filters_out]
-    initializer = tf.truncated_normal_initializer(stddev=CONV_WEIGHT_STDDEV)
-    weights = _get_variable('weights', shape=shape, dtype='float',
-                            initializer=initializer,
-                            weight_decay=CONV_WEIGHT_DECAY)
-    return tf.nn.conv2d(x, weights, [1, stride, stride, 1], padding='SAME')
-  
-        
+
 def _max_pool(x, ksize=3, stride=2):
     return tf.nn.max_pool(x, ksize=[1, ksize, ksize, 1],
          strides=[ 1, stride, stride, 1], padding='SAME')

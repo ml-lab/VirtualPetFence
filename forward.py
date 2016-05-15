@@ -1,7 +1,7 @@
 from convert import print_prob, load_image, checkpoint_fn, meta_fn
 import tensorflow as tf
 
-layers = 50
+layers = 152
 
 img = load_image("data/cat.jpg")
 
@@ -23,6 +23,12 @@ print "graph restored"
 batch = img.reshape((1, 224, 224, 3))
 
 feed_dict = { images: batch }
+
+summary_writer = tf.train.SummaryWriter('/usr/local/models/imagenet',
+                                        graph=sess.graph)
+
+avg_pool = graph.get_tensor_by_name('avg_pool:0')
+last_imgnet_layer = graph.get_tensor_by_name('scale5/block3/Relu:0')
 
 prob = sess.run(prob_tensor, feed_dict=feed_dict)
 
