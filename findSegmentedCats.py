@@ -3,9 +3,9 @@ import scipy.ndimage as ndimage
 import matplotlib.pyplot as plt
 
 def getCatSegmentationDataset():
-    image_names_path = 'train_segment.txt'
+    image_names_path = 'val_segment.txt'
     images_base_path = '/usr/local/data/VOC2012/SegmentationClass/'
-    out_file = open('cats_segmented.txt', 'w')
+    out_file = open('cats_segmented_val.txt', 'w')
     imagenames_file = open(image_names_path)
     image_names = []
     for line in imagenames_file:

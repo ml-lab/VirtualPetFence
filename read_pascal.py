@@ -8,7 +8,6 @@ import os
 
 import scipy.ndimage as ndimage
 
-from convert import print_prob, load_image, checkpoint_fn, meta_fn
 import tensorflow as tf
 import re
 import matplotlib.pyplot as plt
@@ -23,6 +22,12 @@ is_training = tf.convert_to_tensor(True,
                                    dtype='bool',
                                    name='is_training')
 true_values = tf.constant(1, dtype=tf.int32, shape=(BATCH_SIZE,))
+
+def checkpoint_fn(layers):
+    return 'ResNet-L%d.ckpt' % layers
+
+def meta_fn(layers):
+    return 'ResNet-L%d.meta' % layers
 
 def weight_variable(shape, scale=1.0, scope='weight'):
     with tf.variable_scope(scope + '_scale_'+str(scale)):
@@ -63,15 +68,15 @@ def gather3D(idx, values):
 
 def findRegions(x):
     with tf.variable_scope('size56'):
-        x = stack(x, 1, 16, bottleneck=True, is_training=is_training, stride=1)
-        x = block(x, 16, is_training, 2, bottleneck=True, _conv=deconv)
+        x = stack(x, 1, 16, bottleneck=False, is_training=is_training, stride=1)
+        x = block(x, 16, is_training, 2, bottleneck=False, _conv=deconv)
         #x = upscale(x, out_features=512)
     with tf.variable_scope('size112'):
-        x = stack(x, 1, 8, bottleneck=True, is_training=is_training, stride=1)
-        x = block(x, 8, is_training, 2, bottleneck=True, _conv=deconv)
+        x = stack(x, 1, 8, bottleneck=False, is_training=is_training, stride=1)
+        x = block(x, 8, is_training, 2, bottleneck=False, _conv=deconv)
         #x = upscale(x, out_features=128)
     with tf.variable_scope('size224'):
-        x = stack(x, 1, 4, bottleneck=True, is_training=is_training, stride=1)
+        x = stack(x, 1, 4, bottleneck=False, is_training=is_training, stride=1)
         x = block(x, 2, is_training, 1, bottleneck=False)
     return x
     #     x = upscale(x, out_features=64)
@@ -87,8 +92,8 @@ def loss(y, batched_indices):
     y_nonzero = gather3D(batched_indices, y)
     return -tf.reduce_sum(tf.log(y_nonzero))/BATCH_SIZE
 
-def getFilenamesForSegmentedCats():
-    filename_paths = open('cats_segmented.txt')
+def getFilenamesForSegmentedCats(filename='cats_segmented.txt'):
+    filename_paths = open(filename)
     image_base_path = '/usr/local/data/VOC2012/JPEGImages/'
     segmentations_base_path = '/usr/local/data/VOC2012/SegmentationClass/'
     filenames_images = []
@@ -100,8 +105,7 @@ def getFilenamesForSegmentedCats():
         filenames_segmentations.append(segmentations_base_path + name + '.png')
     return filenames_images, filenames_segmentations
 
-def getFilenamesAndMetadata():
-    cat_path = 'cats_annotated.txt'
+def getFilenamesAndMetadata(cat_path='cats_annotated.txt'):
     cat_file = open(cat_path)
     image_names = []
     labels = []
@@ -145,7 +149,7 @@ def getTrainingBatchForSegmentation(image_names, segmentation_names):
     seg = tf.image.resize_images(seg, IMG_SIZE, IMG_SIZE, method=tf.image.ResizeMethod.NEAREST_NEIGHBOR)
     seg = tf.select(tf.logical_and(tf.equal(seg[:, :, 0], 64), tf.equal(tf.reduce_sum(seg, 2), 64)),
                     tf.constant(1, dtype=seg_dtype, shape=(IMG_SIZE, IMG_SIZE)), tf.constant(0, dtype=seg_dtype, shape=(IMG_SIZE, IMG_SIZE)))
-    return tf.train.batch([img, tf.expand_dims(seg, 2)], BATCH_SIZE, num_threads=4)
+    return tf.train.batch([img, tf.expand_dims(seg, 2)], BATCH_SIZE, num_threads=4, capacity=32*4+2)
 
 
 def getTrainingBatch(image_names, labels, nr_of_points):
@@ -209,16 +213,21 @@ def stichMutipleLayers(graph):
     with tf.variable_scope('Joining_layers'):
         scale2, scale3, scale4, scale5 = getLastLayersFromGraph(graph)
         with tf.variable_scope('up2'):
-            up2 = block(scale2, 4, is_training, stride=1, bottleneck=False)
+            up2 = block(scale2, 8, is_training, stride=1, bottleneck=False)
         with tf.variable_scope('up3'):
-            up3 = block(scale3, 4, is_training, stride=2, bottleneck=False, _conv=deconv)
+            up3 = block(scale3, 8, is_training, stride=2, bottleneck=False, _conv=deconv)
         with tf.variable_scope('up4'):
-            up4 = block(scale4, 4, is_training, stride=4, bottleneck=False, _conv=deconv)
+            with tf.variable_scope('a'):
+                up4 = block(scale4, 8, is_training, stride=2, bottleneck=False, _conv=deconv)
+            with tf.variable_scope('b'):
+                up4 = block(up4, 8, is_training, stride=2, bottleneck=False, _conv=deconv)
         with tf.variable_scope('up5'):
             with tf.variable_scope('a'):
-                up5 = block(scale5, 4, is_training, stride=2, bottleneck=False, _conv=deconv)
+                up5 = block(scale5, 8, is_training, stride=2, bottleneck=False, _conv=deconv)
             with tf.variable_scope('b'):
-                up5 = block(up5, 4, is_training, stride=4, bottleneck=False, _conv=deconv)
+                up5 = block(up5, 8, is_training, stride=2, bottleneck=False, _conv=deconv)
+            with tf.variable_scope('c'):
+                up5 = block(up5, 8, is_training, stride=2, bottleneck=False, _conv=deconv)
         return tf.concat(3, [up2, up3, up4, up5])# tf.concat(3, [up2, up3, up4, up5])
 
 
@@ -226,6 +235,11 @@ def restore_resnet_graph(sess):
     layers = 152
     new_saver = tf.train.import_meta_graph(meta_fn(layers))
     new_saver.restore(sess, checkpoint_fn(layers))
+
+
+def accuracy(softmax, label):
+    y = tf.cast(tf.expand_dims(tf.argmax(softmax, 3), 3), tf.float32)
+    return tf.reduce_mean(tf.abs(label - (1 - y)))
 
 # image_names, labels, centers, nr_of_points = getFilenamesAndMetadata()
 # img, label, roi_idx, nr_of_points = getTrainingBatch(image_names, labels, nr_of_points)
@@ -257,12 +271,27 @@ tf.image_summary('predicted regions', tf.expand_dims(softmaxed[:, :, :, 0], 3))
 
 img_names, seg_names = getFilenamesForSegmentedCats()
 img, seg = getTrainingBatchForSegmentation(img_names, seg_names)
-tf.image_summary('image', img)
-tf.image_summary('segmentation', seg)
 
-cross_entropy = segmentationLoss(softmaxed, seg)
+img_names_val, seg_names_val = getFilenamesForSegmentedCats('cats_segmented_val.txt')
+img_val, seg_val = getTrainingBatchForSegmentation(img_names_val, seg_names_val)
+#tf.image_summary('image', img)
+
+segmented_label = tf.placeholder(tf.float32, (BATCH_SIZE, IMG_SIZE, IMG_SIZE, 1), 'segmented_label')
+tf.image_summary('images', images)
+tf.image_summary('segmentation', segmented_label)
+
+cross_entropy = segmentationLoss(softmaxed, segmented_label)
 tf.scalar_summary('cross_entropy', cross_entropy)
-train_step = tf.train.MomentumOptimizer(0.0001, 0.9).minimize(cross_entropy)#, var_list=tf.trainable_variables()[-18:])
+acc = accuracy(softmaxed, segmented_label)
+#train_step = tf.train.MomentumOptimizer(0.01, 0.9).minimize(cross_entropy)#, var_list=tf.trainable_variables()[-18:])
+
+optimizer = tf.train.AdamOptimizer(0.0001)#.minimize(cross_entropy)#, var_list=tf.trainable_variables()[-18:])
+grads = optimizer.compute_gradients(cross_entropy)
+train_step = optimizer.apply_gradients(grads)
+for grad, var in grads:
+    if grad is not None:
+        tf.histogram_summary(var.op.name + '/gradients', grad)
+
 
 saver = tf.train.Saver(tf.all_variables())
 summary_op = tf.merge_all_summaries()
@@ -270,7 +299,7 @@ summary_op = tf.merge_all_summaries()
 init = tf.initialize_all_variables()
 sess.run(init)
 
-train_dir = '/usr/local/models/catnet'
+train_dir = '/tmp/models/catnet3'
 
 step = 0
 load_old = True
@@ -290,7 +319,7 @@ if tf.gfile.Exists(train_dir) and load_old:
     step_str = ckpt.model_checkpoint_path.split('/')[-1].split('-')[-1]
     print('Succesfully loaded model from %s at step=%s.' %
           (ckpt.model_checkpoint_path, step_str))
-    step = int(step_str)
+    step = int(step_str) + 1
 
 tf.train.start_queue_runners(sess=sess)
 summary_writer = tf.train.SummaryWriter(train_dir,
@@ -298,14 +327,16 @@ summary_writer = tf.train.SummaryWriter(train_dir,
 
 
 def saveAndSummary(saver, summary_op, step, sess):
-    summary_str = sess.run(summary_op, feed_dict={images: i})
+    summary_str = sess.run(summary_op, feed_dict={images: i, segmented_label: l})
     summary_writer.add_summary(summary_str, step)
-    saver.save(sess, '/usr/local/models/catnet/model.ckpt', global_step=step)
+    saver.save(sess, train_dir + '/model.ckpt', global_step=step)
 
-
+total_loss = 0
+avg_loss = 0
+cnt = 1
 for step in range(step, 100000):
     i, l = sess.run([img, seg])
-    loss_val, _ = sess.run([cross_entropy, train_step], feed_dict={images: i})
+    loss_val, _ = sess.run([cross_entropy, train_step], feed_dict={images: i, segmented_label: l})
     #s = sess.run(last_layers, feed_dict={images: i})
     #showImageAndWeights(i, s)
     #print sess.run(prob_tensor, feed_dict={images: i})
@@ -317,8 +348,16 @@ for step in range(step, 100000):
     # pred_bool = np.logical_and(pred_bool_bot, pred_bool_top).sum(1).astype(np.bool)
     # acc = np.mean((pred_bool == l).astype(np.float))
     #top1 = print_prob(prob[0])
-    print step, ':', loss_val
+    avg_loss += loss_val
+    total_loss += loss_val
+    print step, ':', loss_val, '\t', total_loss/cnt
+    cnt += 1
     if step % 100 == 0:
+        i_val, l_val = sess.run([img, seg])
+        loss_val2, acc_val = sess.run([cross_entropy, acc], feed_dict={images: i_val, segmented_label: l_val})
+        print 'Validate loss:', loss_val2, 'Validate acc', acc_val
+        print 'Avg loss:', avg_loss/100
+        avg_loss = 0
         saveAndSummary(saver, summary_op, step, sess)
 
 
