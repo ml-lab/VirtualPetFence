@@ -1,4 +1,5 @@
 *.swp
+.idea/
 *.pyc
 .ipynb_checkpoints/
 *.caffemodel
