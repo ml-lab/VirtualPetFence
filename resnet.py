@@ -198,7 +198,7 @@ def block(x, filters_internal, is_training, stride, bottleneck, _conv=_conv):
 def _relu(x):
     return tf.nn.relu(x)
    
-def _bn(x, is_training, trainable=False):
+def _bn(x, is_training, trainable=True):
     x_shape = x.get_shape()
     params_shape = x_shape[-1:]
     axis = list(range(len(x_shape) - 1))
@@ -221,6 +221,8 @@ def _bn(x, is_training, trainable=False):
         moving_mean, mean, BN_DECAY)
     update_moving_variance = moving_averages.assign_moving_average(
         moving_variance, variance, BN_DECAY)
+
+    #mean = tf.Print(mean, [mean, variance, moving_mean, moving_variance])
     tf.add_to_collection(UPDATE_OPS_COLLECTION, update_moving_mean)
     tf.add_to_collection(UPDATE_OPS_COLLECTION, update_moving_variance)
 
