@@ -22,7 +22,6 @@ resFile = resFile%(dataDir, dataType, annType)
 # visialuze gt and dt side by side
 catIds = cocoGt.getCatIds(catNms=[ 'cat'])
 imgIds=sorted(cocoGt.getImgIds(catIds=catIds))
-imgIds=imgIds[0:100]
 imgId = imgIds[np.random.randint(100)]
 img = cocoGt.loadImgs(imgId)[0]
 I = io.imread('%s/train2014/%s'%(dataDir,img['file_name']))
@@ -33,6 +32,6 @@ fig = plt.figure(figsize=[15,10])
 # ground truth
 plt.subplot(121)
 plt.imshow(I); plt.axis('off'); plt.title('ground truth')
-annIds = cocoGt.getAnnIds(imgIds=imgId)
+annIds = cocoGt.getAnnIds(imgIds=imgId, catIds=[17])
 anns = cocoGt.loadAnns(annIds)
 cocoGt.showAnns(anns)

@@ -1,21 +1,12 @@
-import xml.etree.ElementTree as ET
-
-import operator
-
-import datetime
-
 import os
 
-import scipy.ndimage as ndimage
-
-import tensorflow as tf
-import re
 import matplotlib.pyplot as plt
-
 import numpy as np
+import tensorflow as tf
 
 import resnet
-from resnet import _bn, _conv, block, stack
+from read_data import getDataset
+from resnet import _bn, block, stack
 
 UPDATE_OPERATORS = 'update_operators'
 
@@ -52,16 +43,13 @@ def deconv(x, filters_out, ksize=3, stride=1):
 
 
 def upscale(x, scale=2, out_features=None):
-    #x =tf.Print(x, [x], message='in upscale', summarize=30)
     with tf.variable_scope('upscale'):
         batch, height, width, in_channels = x.get_shape().as_list()
         if out_features is None:
             out_features = in_channels/2
         W_conv = tf.get_variable('transpose_W', [3, 3, out_features, in_channels], initializer=tf.contrib.layers.xavier_initializer_conv2d(dtype=x.dtype), dtype=x.dtype)# weight_variable(, scale=7.07)
         x = tf.nn.conv2d_transpose(x, W_conv, [BATCH_SIZE, height*scale, width*scale, out_features], [1, scale, scale, 1])
-        #x =tf.Print(x, [x], message='before bn', summarize=30)
         x = _bn(x, is_training)
-        #x =tf.Print(x, [x], message='after bn\n', summarize=30)
         return tf.nn.elu(x)
 
 def gather3D(idx, values):
@@ -83,12 +71,6 @@ def findRegions(x):
         x = stack(x, 1, 4, bottleneck=False, is_training=is_training, stride=1)
         x = block(x, 2, is_training, 1, bottleneck=False)
     return x
-    #     x = upscale(x, out_features=64)
-    # with tf.variable_scope('size112'):
-    #     x = upscale(x, out_features=16)
-    # with tf.variable_scope('size224'):
-    #     x = upscale(x, out_features=1)
-    # return x
 
 def loss(y, batched_indices):
     old_shape = y.get_shape()
@@ -96,187 +78,52 @@ def loss(y, batched_indices):
     y_nonzero = gather3D(batched_indices, y)
     return -tf.reduce_sum(tf.log(y_nonzero))/BATCH_SIZE
 
-def getFilenamesForSegmentedCats(filename='cats_segmented.txt'):
-    filename_paths = open(filename)
-    image_base_path = '/usr/local/data/VOC2012/JPEGImages/'
-    segmentations_base_path = '/usr/local/data/VOC2012/SegmentationClass/'
-    filenames_images = []
-    filenames_segmentations = []
-
-    for line in filename_paths:
-        name = line.strip()
-        filenames_images.append(image_base_path + name + '.jpg')
-        filenames_segmentations.append(segmentations_base_path + name + '.png')
-    return filenames_images, filenames_segmentations
-
-def getFilenamesAndMetadata(cat_path='cats_annotated.txt'):
-    cat_file = open(cat_path)
-    image_names = []
-    labels = []
-    annotation_files = []
-    images_base_path = '/usr/local/data/VOC2012/JPEGImages/'
-    annotation_base_path = '/usr/local/data/VOC2012/Annotations/'
-    centers = []
-
-    nr_of_points = []
-    sizes = []
-    for i, line in enumerate(cat_file):
-        values = line.split()
-        name, l = values[:2]
-        size = map(float, values[2:4])
-
-        c = map(float, values[4:][::-1])
-        nr_of_points.append(len(c) / 2)
-        center = zip([i] * (len(c) / 2),
-                     map(lambda x: IMG_SIZE * x / size[0], c[::2]),
-                     map(lambda x: IMG_SIZE * x / size[1], c[1::2]))
-        centers += sorted(center, key=operator.itemgetter(0, 1, 2))
-        annotation_files.append(annotation_base_path + name + '.xml')
-        image_names.append(images_base_path + name + '.jpg')
-        labels.append(bool(int(l) + 1))
-    centers = np.array(centers)
-    return image_names, labels, centers, nr_of_points
-
-
-#tree = ET.parse('/usr/local/data/VOC2012/Annotations/2007_000027.xml')
-
-
-def getTrainingBatchForSegmentation(image_names, segmentation_names):
-    SEED = 1
-    image_names = tf.convert_to_tensor(image_names, dtype=tf.string)
-    segmentation_names = tf.convert_to_tensor(segmentation_names, dtype=tf.string)
-    image_queue, seg_queue = tf.train.slice_input_producer([image_names, segmentation_names], capacity=BATCH_SIZE*(4+1))
-    img = tf.image.decode_jpeg(tf.read_file(image_queue), channels=3)
-    img = tf.image.resize_images(img, IMG_SIZE, IMG_SIZE)
-    img = tf.image.random_flip_left_right(img, seed=SEED)
-
-    img = tf.image.random_brightness(img, max_delta=63)
-    img = tf.image.random_contrast(img,
-                             lower=0.2, upper=1.8)
-    img = img - tf.reduce_min(img)
-    img = img / tf.reduce_max(img)
-
-    seg_dtype = tf.float32
-    seg = tf.image.decode_png(tf.read_file(seg_queue), channels=3)
-    seg = tf.image.random_flip_left_right(seg, seed=SEED)
-    seg = tf.image.resize_images(seg, IMG_SIZE, IMG_SIZE, method=tf.image.ResizeMethod.NEAREST_NEIGHBOR)
-    seg = tf.select(tf.logical_and(tf.equal(seg[:, :, 0], 64), tf.equal(tf.reduce_sum(seg, 2), 64)),
-                    tf.constant(1, dtype=seg_dtype, shape=(IMG_SIZE, IMG_SIZE)), tf.constant(0, dtype=seg_dtype, shape=(IMG_SIZE, IMG_SIZE)))
-    return tf.train.batch([img, tf.expand_dims(seg, 2)], BATCH_SIZE, num_threads=4, capacity=32*2)
-
-
-def getDataset(filename='cats_segmented_mixed.txt', scope='retrieve_training_data'):
-    with tf.variable_scope(scope):
-        img_names, seg_names = getFilenamesForSegmentedCats(filename)
-        return getTrainingBatchForSegmentation(img_names, seg_names)
-
-def getTrainingBatchForCachedData(filename='/usr/local/data/segimages.bin'):
-    # filename_queue = tf.train.string_input_producer(['/usr/local/data/segimages.bin'])
-
-    image_bytes = IMG_SIZE*IMG_SIZE*3
-    segmentation_bytes = IMG_SIZE*IMG_SIZE
-    s2_bytes = 56*56*256
-    s3_bytes = 28*28*512
-    s4_bytes = 14*14*1024
-    s5_bytes = 7*7*2048
-
-    record_bytes = image_bytes + segmentation_bytes + s2_bytes+s3_bytes+s4_bytes+s5_bytes
-    # reader = tf.FixedLengthRecordReader(record_bytes=record_bytes*4)
-    # key, value = reader.read(filename_queue)
-    # record_float = tf.decode_raw(value, tf.float32)
-    # img = tf.reshape(tf.slice(record_float, [0], [image_bytes]), (IMG_SIZE, IMG_SIZE, 3))
-    # seg = tf.reshape(tf.slice(record_float, [image_bytes], [segmentation_bytes]), (IMG_SIZE, IMG_SIZE, 1))
-    # s2 = tf.reshape(record_float[segmentation_bytes:segmentation_bytes+s2_bytes], (56, 56, 256))
-    # s3_slice = record_float[s2_bytes:s2_bytes+s3_bytes]# tf.slice(record_float, [s2_bytes], [s3_bytes])
-    # s3 = tf.reshape(s3_slice, (28, 28, 512))
-    # s4 = tf.reshape(record_float[s3_bytes:s3_bytes+s4_bytes], (14, 14, 1024))
-    # s5 = tf.reshape(record_float[s4_bytes: s4_bytes + s5_bytes], (7, 7, 2048))
-    # min_capacity = 100
-    with tf.device('/cpu:0'):
-        in_data = tf.constant(np.fromfile(filename, dtype=np.float32).reshape((-1, record_bytes)), name='in_data')
-        record_float = tf.train.slice_input_producer([in_data], capacity=96)[0]
-        img = tf.reshape(tf.slice(record_float, [0], [image_bytes]), (IMG_SIZE, IMG_SIZE, 3))
-        seg = tf.reshape(tf.slice(record_float, [image_bytes], [segmentation_bytes]), (IMG_SIZE, IMG_SIZE, 1))
-        s2 = tf.reshape(record_float[segmentation_bytes:segmentation_bytes+s2_bytes], (56, 56, 256))
-        s3_slice = record_float[s2_bytes:s2_bytes+s3_bytes]# tf.slice(record_float, [s2_bytes], [s3_bytes])
-        s3 = tf.reshape(s3_slice, (28, 28, 512))
-        s4 = tf.reshape(record_float[s3_bytes:s3_bytes+s4_bytes], (14, 14, 1024))
-        s5 = tf.reshape(record_float[s4_bytes: s4_bytes + s5_bytes], (7, 7, 2048))
-        return tf.train.batch([seg, s2, s3, s4, s5], BATCH_SIZE, num_threads=4, capacity=32 * 2)
-    #return tf.train.shuffle_batch([img, seg], batch_size=BATCH_SIZE, min_after_dequeue=100, capacity=100+3*BATCH_SIZE, num_threads=1)
-    #return tf.train.shuffle_batch([seg, s2, s3, s4, s5], batch_size=BATCH_SIZE, min_after_dequeue=BATCH_SIZE*4, capacity=50000+3*BATCH_SIZE, num_threads=4)
-
-def getTrainingBatch(image_names, labels, nr_of_points):
-    centers_range = (np.cumsum([0] + nr_of_points)[:-1]).astype(np.int32)
-    nr_of_points = tf.convert_to_tensor(nr_of_points, dtype=tf.int32)
-    image_names = tf.convert_to_tensor(image_names, dtype=tf.string)
-    labels = tf.convert_to_tensor(labels, dtype=tf.bool)
-    image_queue, label_queue, roi_idx_queue, nr_of_points_queue = tf.train.slice_input_producer(
-        [image_names, labels, centers_range, nr_of_points],
-        capacity=BATCH_SIZE * (4 + 1))
-    img = tf.image.decode_jpeg(tf.read_file(image_queue), channels=3)
-    # img = tf.image.resize_image_with_crop_or_pad(img, 360, 480)
-    img = tf.image.resize_images(img, IMG_SIZE, IMG_SIZE)
-    img = img / 255.0
-    img, label, roi_idx, nr_of_points = tf.train.batch([img, label_queue, roi_idx_queue, nr_of_points_queue], BATCH_SIZE, num_threads=4)
-    return img, label, roi_idx, nr_of_points
-
-
-def showImageAndWeights(img, weights):
-    w = weights - weights.min()
-    w = (255*(w/weights.max())).astype(np.uint8)
-    plt.subplot(1, 2, 1)
-    plt.imshow((img*255).astype(np.uint8))
-    plt.subplot(1, 2, 2)
-    plt.imshow(w)
-    plt.show()
-
-def createBatchedIndices(roi_idx, centers, nr_of_points):
-    centers = tf.convert_to_tensor(centers, dtype=tf.int32)
-    simple_roi_idx = roi_idx
-
-    def inLoop(i, roi_idx):
-        new_roi = simple_roi_idx + tf.select(tf.greater(nr_of_points, i), true_values * i,
-                                                                      true_values * 0)
-        return tf.add(i, 1),\
-               tf.concat(0, [roi_idx, new_roi])
-
-    points_max = tf.cast(tf.reduce_max(nr_of_points), tf.int32)
-
-    i = tf.constant(0)
-    c = lambda i, nr_of_points: tf.less(i, points_max)
-    i2, roi_idx = tf.while_loop(c, inLoop, [i, roi_idx], parallel_iterations=1)
-
-    roi_idx = tf.unique(roi_idx)[0]
-    batched_indices = tf.gather(centers, roi_idx)
-    unique = tf.unique(batched_indices[:, 0])
-    return tf.concat(1, [tf.expand_dims(unique[1], 1), batched_indices[:, 1:]])
 
 def getLastLayersFromGraph(graph):
-    scale2 = graph.get_tensor_by_name('scale2/block3/Relu:0') / (10 ** 20)
-    scale3 = graph.get_tensor_by_name('scale3/block8/Relu:0') / (10 ** 20)
+    scale2 = graph.get_tensor_by_name('scale2/block3/Relu:0') / (10)
+    scale3 = graph.get_tensor_by_name('scale3/block8/Relu:0') / (10 ** 5)
     scale4 = graph.get_tensor_by_name('scale4/block36/Relu:0') / (10 ** 20)
-    scale5 = graph.get_tensor_by_name('scale5/block3/Relu:0') / (10 ** 20)
+    scale5 = graph.get_tensor_by_name('scale5/block3/Relu:0') / (10 ** 30)
     return scale2, scale3, scale4, scale5
 
 def segmentationLoss(softmax, seg):
+    tf.image_summary('segmentation', seg)
     seg = tf.squeeze(seg, [3])
     return tf.reduce_mean(-seg * tf.log(softmax[:, :, :, 0]) + (seg - 1) * tf.log(softmax[:, :, :, 1]))
+
+def depth_conv(x, filters_out):
+    with tf.variable_scope('depth_conv'):
+        x_conv = resnet._conv(x, filters_out, ksize=3)
+        x_conv = _bn(x_conv, is_training)
+        return resnet._relu(x_conv)
+
+
+def increaseToSpatialSize(x, out_filters=None, size=56):
+    B, N, M, C = x.get_shape().as_list()
+    with tf.variable_scope('size' + str(N)):
+        if out_filters is None:
+            out_filters = C
+        if N>=size: return block(x, out_filters, is_training, stride=1, bottleneck=False)
+        return increaseToSpatialSize(block(x, C, is_training, 2, bottleneck=False, _conv=deconv))
 
 def stichMutipleLayers(scales):
     with tf.variable_scope('Joining_layers'):
         scale2, scale3, scale4, scale5 = scales
         with tf.variable_scope('up2'):
+            scale2 = depth_conv(scale2, 32)
             up2 = block(scale2, 8, is_training, stride=1, bottleneck=False)
         with tf.variable_scope('up3'):
+            scale3 = depth_conv(scale3, 32)
             up3 = block(scale3, 8, is_training, stride=2, bottleneck=False, _conv=deconv)
         with tf.variable_scope('up4'):
             with tf.variable_scope('a'):
+                scale4 = depth_conv(scale4, 32)
                 up4 = block(scale4, 8, is_training, stride=2, bottleneck=False, _conv=deconv)
             with tf.variable_scope('b'):
                 up4 = block(up4, 8, is_training, stride=2, bottleneck=False, _conv=deconv)
         with tf.variable_scope('up5'):
             with tf.variable_scope('a'):
+                scale5 = depth_conv(scale5, 32)
                 up5 = block(scale5, 8, is_training, stride=2, bottleneck=False, _conv=deconv)
             with tf.variable_scope('b'):
                 up5 = block(up5, 8, is_training, stride=2, bottleneck=False, _conv=deconv)
@@ -295,33 +142,25 @@ def accuracy(softmax, label):
     y = tf.cast(tf.expand_dims(tf.argmax(softmax, 3), 3), tf.float32)
     return 1 - tf.reduce_mean(tf.abs(label - (1 - y)))
 
-# image_names, labels, centers, nr_of_points = getFilenamesAndMetadata()
-# img, label, roi_idx, nr_of_points = getTrainingBatch(image_names, labels, nr_of_points)
-# batched_indices = createBatchedIndices(roi_idx, centers, nr_of_points)
-#
-# print "graph restored"
-#
+
 
 
 sess = tf.Session()
-
-
-
 restore_resnet_graph(sess)
 graph = tf.get_default_graph()
+#sess.run(tf.initialize_all_variables())
+
+# with tf.Graph().as_default() as my_graph:
+#     img, seg = getDataset()
+#     prob_tensor, =tf.import_graph_def(graph.as_graph_def(), input_map={"images:0": img}, return_elements=["prob:0"])
+#     sess2 = tf.Session(graph=my_graph)
+#     sess2.run(tf.initialize_all_variables())
+#     print sess2.run(prob_tensor)
+
 prob_tensor = graph.get_tensor_by_name("prob:0")
 images = graph.get_tensor_by_name("images:0")
 
-
 stiched = stichMutipleLayers(getLastLayersFromGraph(graph))
-
-
-#is_eval = tf.placeholder(dtype=tf.bool, name='is_eval')
-#loaded = tf.cond(is_eval, lambda: getTrainingBatchForCachedData('/usr/local/data/segimages_val.bin'), lambda: getTrainingBatchForCachedData())
-#tf.train.start_queue_runners(sess=sess)
-#bla = sess.run(loaded)
-#print bla
-#stiched = stichMutipleLayers(loaded[1:])
 
 
 
@@ -332,13 +171,12 @@ softmaxed = tf.reshape(tf.nn.softmax(tf.reshape(pred_region, (BATCH_SIZE*IMG_SIZ
 tf.histogram_summary('pred_region', pred_region)
 tf.image_summary('predicted regions', tf.expand_dims(softmaxed[:, :, :, 0], 3))
 
-img, seg = getDataset()
+img, seg = getDataset('cats_segmented_mixed.txt', distort=True)
 img_val, seg_val = getDataset('cats_segmented_val.txt', scope='retrieve_test_data')
 
 segmented_label = tf.placeholder(tf.float32, (BATCH_SIZE, IMG_SIZE, IMG_SIZE, 1), 'segmented_label')
 #segmented_label = loaded[0]
 tf.image_summary('images', images)
-tf.image_summary('segmentation', segmented_label)
 
 cross_entropy = segmentationLoss(softmaxed, segmented_label)
 tf.scalar_summary('cross_entropy', cross_entropy)
@@ -372,8 +210,8 @@ summary_op = tf.merge_all_summaries()
 init = tf.initialize_all_variables()
 sess.run(init)
 
-train_dir = '/tmp/models/catnet5'
-test_dir = '/tmp/models/catnet5_test'
+train_dir = '/tmp/models/catnet8'
+test_dir = '/tmp/models/catnet8_test'
 
 step = 1
 load_old = True
@@ -428,6 +266,8 @@ for step in range(step, 100000):
     print step, ':', loss_val, '\t', total_loss/cnt
     cnt += 1
     if step % 100 == 0:
+        total_loss = 0
+        cnt = 1
         print 'Avg loss:', avg_loss / 100
         avg_loss = 0
         saveAndSummary(summary_op, step, sess)

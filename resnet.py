@@ -5,7 +5,7 @@ import numpy as np
 
 FLAGS = tf.app.flags.FLAGS
 
-MOVING_AVERAGE_DECAY = 0.9997
+MOVING_AVERAGE_DECAY = 0.999
 FC_WEIGHT_STDDEV = 0.01
 FC_WEIGHT_DECAY = 0.00004
 CONV_WEIGHT_STDDEV = 0.1
@@ -19,7 +19,7 @@ IMAGENET_MEAN_BGR = [
     115.902882574,
     123.151630838,
 ]
-
+IS_TRAINABLE = True
 
 def inference(x, is_training,
               num_classes=1000,
@@ -198,7 +198,7 @@ def block(x, filters_internal, is_training, stride, bottleneck, _conv=_conv):
 def _relu(x):
     return tf.nn.relu(x)
    
-def _bn(x, is_training, trainable=True):
+def _bn(x, is_training):
     x_shape = x.get_shape()
     params_shape = x_shape[-1:]
     axis = list(range(len(x_shape) - 1))
@@ -209,14 +209,17 @@ def _bn(x, is_training, trainable=True):
     moving_mean = _get_variable('moving_mean',
                                 params_shape,
                                 initializer=tf.zeros_initializer,
-                                trainable=trainable)
+                                trainable=False)
     moving_variance = _get_variable('moving_variance',
                                     params_shape,
                                     initializer=tf.ones_initializer,
-                                    trainable=trainable)
+                                    trainable=False)
 
     # These ops will only be preformed when training.
     mean, variance = tf.nn.moments(x, axis)
+    tf.histogram_summary('BN_conv_mean'+x.name, tf.abs(mean-moving_mean))
+    tf.histogram_summary('BN_conv_std'+x.name, tf.abs(variance-moving_variance))
+    #mean = tf.Print(mean, [mean, variance, moving_mean, moving_variance])
     update_moving_mean = moving_averages.assign_moving_average(
         moving_mean, mean, BN_DECAY)
     update_moving_variance = moving_averages.assign_moving_average(
@@ -249,7 +252,7 @@ def _fc(x, num_units_out):
     x = tf.nn.xw_plus_b(x, weights, biases)
     return x
 
-def _get_variable(name, shape, initializer, weight_decay=0.0, dtype='float', trainable=True):
+def _get_variable(name, shape, initializer, weight_decay=0.0, dtype='float', trainable=IS_TRAINABLE):
     "A little wrapper around tf.get_variable to do weight decay and add to"
     "resnet collection"
     if weight_decay > 0:
