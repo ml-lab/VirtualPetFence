@@ -5,7 +5,8 @@ import numpy as np
 import tensorflow as tf
 
 import resnet
-from read_data import getDataset
+from read_data import getDataset, getTestBatchWithNoSegmentation, getFilenamesForSegmentedCats, \
+    getTrainingBatchForSegmentation, getProducerForFilenames
 from resnet import _bn, block, stack
 
 UPDATE_OPERATORS = 'update_operators'
@@ -13,7 +14,7 @@ UPDATE_OPERATORS = 'update_operators'
 BATCH_SIZE = 32
 IMG_SIZE = 224
 
-true_values = tf.constant(1, dtype=tf.int32, shape=(BATCH_SIZE,))
+#true_values = tf.constant(1, dtype=tf.int32, shape=(BATCH_SIZE,))
 is_training = tf.placeholder(dtype=tf.bool,
                           name='is_training')
 
@@ -32,14 +33,16 @@ def weight_variable(shape, scale=1.0, scope='weight'):
 
 
 def deconv(x, filters_out, ksize=3, stride=1):
-    shape = x.get_shape().as_list()
-    filters_in = shape[-1]
+    shape = tf.shape(x)
+    shape_list = x.get_shape().as_list()
+    filters_in = shape_list[-1]
 
     weights = tf.get_variable('weights_transpose', [3, 3, filters_out, filters_in],
                              initializer=tf.contrib.layers.xavier_initializer_conv2d(dtype=x.dtype))  # weight_variable(, scale=7.07)
-
-    out_size = [BATCH_SIZE, shape[1] * stride, shape[2] * stride, filters_out]
-    return tf.nn.conv2d_transpose(x, weights, out_size, [1, stride, stride, 1])
+    out_size = tf.pack([shape[0], shape[1] * stride, shape[2] * stride, filters_out])
+    upscaled = tf.nn.conv2d_transpose(x, weights, out_size, [1, stride, stride, 1])
+    upscaled.set_shape([shape_list[0], shape_list[1] * stride, shape_list[2] * stride, filters_out])
+    return upscaled
 
 
 def upscale(x, scale=2, out_features=None):
@@ -48,7 +51,7 @@ def upscale(x, scale=2, out_features=None):
         if out_features is None:
             out_features = in_channels/2
         W_conv = tf.get_variable('transpose_W', [3, 3, out_features, in_channels], initializer=tf.contrib.layers.xavier_initializer_conv2d(dtype=x.dtype), dtype=x.dtype)# weight_variable(, scale=7.07)
-        x = tf.nn.conv2d_transpose(x, W_conv, [BATCH_SIZE, height*scale, width*scale, out_features], [1, scale, scale, 1])
+        x = tf.nn.conv2d_transpose(x, W_conv, [batch, height*scale, width*scale, out_features], [1, scale, scale, 1])
         x = _bn(x, is_training)
         return tf.nn.elu(x)
 
@@ -73,10 +76,10 @@ def findRegions(x):
     return x
 
 def loss(y, batched_indices):
-    old_shape = y.get_shape()
-    y = tf.reshape(tf.nn.softmax(tf.reshape(y, [BATCH_SIZE, -1])), old_shape[:3])
+    old_shape = y.get_shape().as_list()
+    y = tf.reshape(tf.nn.softmax(tf.reshape(y, [old_shape[0], -1])), old_shape[:3])
     y_nonzero = gather3D(batched_indices, y)
-    return -tf.reduce_sum(tf.log(y_nonzero))/BATCH_SIZE
+    return -tf.reduce_sum(tf.log(y_nonzero))/old_shape[0]
 
 
 def getLastLayersFromGraph(graph):
@@ -110,20 +113,20 @@ def stichMutipleLayers(scales):
     with tf.variable_scope('Joining_layers'):
         scale2, scale3, scale4, scale5 = scales
         with tf.variable_scope('up2'):
-            scale2 = depth_conv(scale2, 32)
+            scale2 = depth_conv(_bn(scale2, is_training), 32)
             up2 = block(scale2, 8, is_training, stride=1, bottleneck=False)
         with tf.variable_scope('up3'):
-            scale3 = depth_conv(scale3, 32)
+            scale3 = depth_conv(_bn(scale3, is_training), 32)
             up3 = block(scale3, 8, is_training, stride=2, bottleneck=False, _conv=deconv)
         with tf.variable_scope('up4'):
             with tf.variable_scope('a'):
-                scale4 = depth_conv(scale4, 32)
+                scale4 = depth_conv(_bn(scale4, is_training), 32)
                 up4 = block(scale4, 8, is_training, stride=2, bottleneck=False, _conv=deconv)
             with tf.variable_scope('b'):
                 up4 = block(up4, 8, is_training, stride=2, bottleneck=False, _conv=deconv)
         with tf.variable_scope('up5'):
             with tf.variable_scope('a'):
-                scale5 = depth_conv(scale5, 32)
+                scale5 = depth_conv(_bn(scale5, is_training), 32)
                 up5 = block(scale5, 8, is_training, stride=2, bottleneck=False, _conv=deconv)
             with tf.variable_scope('b'):
                 up5 = block(up5, 8, is_training, stride=2, bottleneck=False, _conv=deconv)
@@ -165,16 +168,24 @@ stiched = stichMutipleLayers(getLastLayersFromGraph(graph))
 
 
 pred_region = findRegions(stiched)
-old_shape = pred_region.get_shape()
-softmaxed = tf.reshape(tf.nn.softmax(tf.reshape(pred_region, (BATCH_SIZE*IMG_SIZE*IMG_SIZE, 2))), old_shape)
+old_shape = pred_region.get_shape().as_list()
+softmaxed = tf.reshape(tf.nn.softmax(tf.reshape(pred_region, (-1, 2))), [-1] + old_shape[1:])
 
 tf.histogram_summary('pred_region', pred_region)
 tf.image_summary('predicted regions', tf.expand_dims(softmaxed[:, :, :, 0], 3))
 
-img, seg = getDataset('cats_segmented_mixed.txt', distort=True)
-img_val, seg_val = getDataset('cats_segmented_val.txt', scope='retrieve_test_data')
+img_coco_names, seg_coco_names = getFilenamesForSegmentedCats('/usr/local/data/coco2014_cats/segmented_cats.txt',
+                                                              image_base_path='/usr/local/data/coco2014_cats/images/',
+                                                              segmentation_base_path='/usr/local/data/coco2014_cats/segmentations/')
+img_coco_names2, seg_coco_names2 = getFilenamesForSegmentedCats('/usr/local/data/coco2014_cats2/segmented_cats.txt',
+                                                              image_base_path='/usr/local/data/coco2014_cats2/images/',
+                                                              segmentation_base_path='/usr/local/data/coco2014_cats2/segmentations/')
+img_default_names, seg_default_names = getFilenamesForSegmentedCats('cats_segmented_mixed.txt')
+img, seg = getTrainingBatchForSegmentation(getProducerForFilenames(img_coco_names + img_coco_names2 + img_default_names,
+                                                                   seg_coco_names + seg_coco_names2 + seg_default_names), distort=True)
+img_val, seg_val = getDataset('cats_segmented_val.txt', scope='retrieve_test_data', distort=False)
 
-segmented_label = tf.placeholder(tf.float32, (BATCH_SIZE, IMG_SIZE, IMG_SIZE, 1), 'segmented_label')
+segmented_label = tf.placeholder(tf.float32, (None, IMG_SIZE, IMG_SIZE, 1), 'segmented_label')
 #segmented_label = loaded[0]
 tf.image_summary('images', images)
 
@@ -189,8 +200,8 @@ apply_avg_loss =  ema.apply([cross_entropy])
 loss_avg = ema.average(cross_entropy)
 tf.scalar_summary('loss_avg', loss_avg)
 #train_step = tf.train.MomentumOptimizer(0.01, 0.9).minimize(cross_entropy)#, var_list=tf.trainable_variables()[-18:])
-
-optimizer = tf.train.AdamOptimizer(0.0001)#.minimize(cross_entropy)#, var_list=tf.trainable_variables()[-18:])
+lr = tf.placeholder(dtype=tf.bool, name='learning_rate')
+optimizer = tf.train.AdamOptimizer(lr)#.minimize(cross_entropy)#, var_list=tf.trainable_variables()[-18:])
 grads = optimizer.compute_gradients(cross_entropy)
 apply_gradients = optimizer.apply_gradients(grads)
 
@@ -210,20 +221,21 @@ summary_op = tf.merge_all_summaries()
 init = tf.initialize_all_variables()
 sess.run(init)
 
-train_dir = '/tmp/models/catnet8'
-test_dir = '/tmp/models/catnet8_test'
+train_dir = '/tmp/models/catnet10'
+test_dir = '/tmp/models/catnet10_test'
+load_dir = train_dir# '/tmp/models/catnet8'
 
 step = 1
 load_old = True
-if tf.gfile.Exists(train_dir) and load_old:
+if tf.gfile.Exists(load_dir) and load_old:
     restorer = tf.train.Saver(tf.all_variables())
-    ckpt = tf.train.get_checkpoint_state(train_dir)
+    ckpt = tf.train.get_checkpoint_state(load_dir)
     if os.path.isabs(ckpt.model_checkpoint_path):
         # Restores from checkpoint with absolute path.
         restorer.restore(sess, ckpt.model_checkpoint_path)
     else:
         # Restores from checkpoint with relative path.
-        restorer.restore(sess, os.path.join(train_dir,
+        restorer.restore(sess, os.path.join(load_dir,
                                          ckpt.model_checkpoint_path))
 
     # Assuming model_checkpoint_path looks something like:
@@ -232,7 +244,8 @@ if tf.gfile.Exists(train_dir) and load_old:
     step_str = ckpt.model_checkpoint_path.split('/')[-1].split('-')[-1]
     print('Succesfully loaded model from %s at step=%s.' %
           (ckpt.model_checkpoint_path, step_str))
-    step = int(step_str) + 1
+    if train_dir == load_dir:
+        step = int(step_str) + 1
 
 tf.train.start_queue_runners(sess=sess)
 summary_writer = tf.train.SummaryWriter(train_dir,
@@ -253,13 +266,14 @@ def saveAndSummary(summary_op, step, sess):
 
 
 total_loss = 0
+lr_val = 0.00001
 avg_loss = 0
 cnt = 1
 loss_validation = cross_entropy*10
 tf.scalar_summary('validation_loss', loss_validation)
 for step in range(step, 100000):
     i, l = sess.run([img, seg])
-    loss_val, _ = sess.run([cross_entropy, train_step], feed_dict={images: i, segmented_label: l, is_training: True})
+    loss_val, _ = sess.run([cross_entropy, train_step], feed_dict={images: i, segmented_label: l, is_training: True, lr: lr_val})
 
     avg_loss += loss_val
     total_loss += loss_val

@@ -196,7 +196,7 @@ def block(x, filters_internal, is_training, stride, bottleneck, _conv=_conv):
 
 
 def _relu(x):
-    return tf.nn.relu(x)
+    return tf.nn.elu(x)
    
 def _bn(x, is_training):
     x_shape = x.get_shape()

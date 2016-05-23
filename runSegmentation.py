@@ -16,12 +16,17 @@ def load_image(path, size=224):
     resized_img = skimage.transform.resize(crop_img, (size, size))
     return resized_img
 
-img = load_image('data/cat.jpg')
+img = load_image('/usr/local/data/ludde/DSC_0065.jpg')
 
-img = np.tile(img, (32, 1, 1, 1))
+#img = np.tile(img, (32, 1, 1, 1))
+img = img[np.newaxis, :, :]
 
-catFinder = CatFinder()
+with tf.device('/cpu:0'):
+    catFinder = CatFinder()
+    segmentedCat = catFinder(img)
 
-
-segmentedCat = catFinder(img)
+seg = np.zeros((224, 224, 3))
+seg[:, :, 2] = segmentedCat
+plt.imshow(0.5*seg + 0.5*img[0])
 print segmentedCat
+

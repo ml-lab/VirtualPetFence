@@ -8,17 +8,16 @@ IMG_SIZE = 224
 
 true_values = tf.constant(1, dtype=tf.int32, shape=(BATCH_SIZE,))
 
-def getFilenamesForSegmentedCats(filename='cats_segmented.txt'):
+def getFilenamesForSegmentedCats(filename='cats_segmented.txt', image_base_path='/usr/local/data/VOC2012/JPEGImages/',
+                                 segmentation_base_path='/usr/local/data/VOC2012/SegmentationClass/'):
     filename_paths = open(filename)
-    image_base_path = '/usr/local/data/VOC2012/JPEGImages/'
-    segmentations_base_path = '/usr/local/data/VOC2012/SegmentationClass/'
     filenames_images = []
     filenames_segmentations = []
 
     for line in filename_paths:
         name = line.strip()
         filenames_images.append(image_base_path + name + '.jpg')
-        filenames_segmentations.append(segmentations_base_path + name + '.png')
+        filenames_segmentations.append(segmentation_base_path + name + '.png')
     return filenames_images, filenames_segmentations
 
 
@@ -56,18 +55,28 @@ def getProducerForFilenames(image_names, segmentation_names):
     segmentation_names = tf.convert_to_tensor(segmentation_names, dtype=tf.string)
     return tf.train.slice_input_producer([image_names, segmentation_names], capacity=BATCH_SIZE*(4+1))
 
+def getTestBatchWithNoSegmentation(image_names):
+    image_queue, = tf.train.slice_input_producer([image_names])
+    img = tf.image.decode_jpeg(tf.read_file(image_queue), channels=3)
+    img = tf.image.resize_images(img, IMG_SIZE, IMG_SIZE)
+    img = tf.cast(img, tf.float32)
+    return tf.train.batch([img], BATCH_SIZE, capacity=BATCH_SIZE)
+
 def getTrainingBatchForSegmentation(producer, SEED = 1, distort=True):
     image_queue, seg_queue = producer
     img = tf.image.decode_jpeg(tf.read_file(image_queue), channels=3)
     seg = tf.image.decode_png(tf.read_file(seg_queue), channels=3)
 
     if distort:
-        new_size = tf.random_uniform([1], minval=int(1.25*IMG_SIZE), maxval=int(IMG_SIZE*1.8), dtype=tf.int32)
+        new_size = tf.random_uniform([1], minval=int(0.6*IMG_SIZE), maxval=int(IMG_SIZE*1.4), dtype=tf.int32)
         new_aspect = tf.random_uniform([1], minval=0.8, maxval=1.2)
         new_width = tf.cast(tf.cast(new_size, tf.float32)*new_aspect, tf.int32)
 
+        diff = tf.cast(tf.tile(tf.expand_dims(tf.maximum(IMG_SIZE - new_size[0], 0)/2, 0), [2]), tf.int32)
+        zero_tile = tf.zeros([2], dtype=tf.int32)
         img_seg = tf.pack([img, seg])
-        img_seg = tf.image.resize_nearest_neighbor(img_seg, tf.pack([new_size[0], new_width[0]]))
+        img_seg = tf.pad(img_seg, tf.pack([zero_tile, diff, diff, zero_tile]))
+        img_seg = tf.image.resize_nearest_neighbor(img_seg, tf.pack([tf.maximum(new_size[0], IMG_SIZE), tf.maximum(new_width[0], IMG_SIZE)]))
         img_seg = tf.random_crop(img_seg, [2, IMG_SIZE, IMG_SIZE, 3])
         img, seg = tf.unpack(img_seg)
     else:
@@ -92,9 +101,21 @@ def getTrainingBatchForSegmentation(producer, SEED = 1, distort=True):
     return tf.train.batch([img, tf.expand_dims(seg, 2)], BATCH_SIZE, num_threads=4, capacity=32*2)
 
 
-def getDataset(filename='cats_segmented_mixed.txt', scope='retrieve_training_data', distort=True):
+def getDataset(filename='cats_segmented_mixed.txt',
+                image_base_path='/usr/local/data/VOC2012/JPEGImages/',
+               segmentation_base_path='/usr/local/data/VOC2012/SegmentationClass/',
+               scope='retrieve_training_data',
+               distort=True):
     with tf.variable_scope(scope):
-        img_names, seg_names = getFilenamesForSegmentedCats(filename)
+        if isinstance(filename, list):
+            img_names = []
+            seg_names = []
+            for f in filename:
+                img_n, seg_n = getFilenamesForSegmentedCats(f, image_base_path=image_base_path, segmentation_base_path=segmentation_base_path)
+                img_names += img_n
+                seg_names += seg_n
+        else:
+            img_names, seg_names = getFilenamesForSegmentedCats(filename)
         return getTrainingBatchForSegmentation(getProducerForFilenames(img_names, seg_names), distort=distort)
 
 

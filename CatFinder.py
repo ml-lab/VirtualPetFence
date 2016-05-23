@@ -7,7 +7,7 @@ class CatFinder:
 
     def __init__(self):
         self.sess = tf.Session()
-        train_dir = '/tmp/models/catnet3'
+        train_dir = '/tmp/models/catnet9'
 
         ckpt = tf.train.get_checkpoint_state(train_dir)
         model_checkpoint_path = ckpt.model_checkpoint_path.split('/')[-1]
