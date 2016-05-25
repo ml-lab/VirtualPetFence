@@ -1,10 +1,19 @@
 # VirtualPetFence
 
+## Disclamer
 Det meste av koden for å konvertere fra caffemodell til tensorflow modell er tatt fra: https://github.com/ry/tensorflow-resnet.
-Å få treningen til å kjøre fra github er nok ikke helt enkelt siden alle pathene er hardkodet og litt rundt om kring i koden.
+Dette er filene "convert.py", "resnet.py", "forward.py" og "synset.py".
+
+## Avhengigheter
+Programmet er avhengig av **Tensorflow master**, altså man må bygge nyeste fra github, ikke versjon 0.80.
+I tillegg kommer avhengighetene numpy og OpenCV
+
+For å få treningen av nettverket til å fungere må "pathene" til treningsdata være riktig. Get dataset tar inn
+
+Fortrente modeller kan lastes ned på: https://drive.google.com/open?id=0B8EJ9UWrW_JRQ0RZWEJIMGVRTUU
 
 
-Her er oversikten over de viktige filene:
+## Her er oversikten over de viktige filene:
 
 *convert.py* converterer og lager en tensorflow modell som jeg bruker som utgangspunkt
 

@@ -1,6 +1,5 @@
 import os
 
-import matplotlib.pyplot as plt
 import numpy as np
 import tensorflow as tf
 
@@ -14,7 +13,6 @@ UPDATE_OPERATORS = 'update_operators'
 BATCH_SIZE = 32
 IMG_SIZE = 224
 
-#true_values = tf.constant(1, dtype=tf.int32, shape=(BATCH_SIZE,))
 is_training = tf.placeholder(dtype=tf.bool,
                           name='is_training')
 
@@ -45,43 +43,17 @@ def deconv(x, filters_out, ksize=3, stride=1):
     return upscaled
 
 
-def upscale(x, scale=2, out_features=None):
-    with tf.variable_scope('upscale'):
-        batch, height, width, in_channels = x.get_shape().as_list()
-        if out_features is None:
-            out_features = in_channels/2
-        W_conv = tf.get_variable('transpose_W', [3, 3, out_features, in_channels], initializer=tf.contrib.layers.xavier_initializer_conv2d(dtype=x.dtype), dtype=x.dtype)# weight_variable(, scale=7.07)
-        x = tf.nn.conv2d_transpose(x, W_conv, [batch, height*scale, width*scale, out_features], [1, scale, scale, 1])
-        x = _bn(x, is_training)
-        return tf.nn.elu(x)
-
-def gather3D(idx, values):
-    N, M, C = values.get_shape().as_list()
-    mult = [N*M, M, 1]
-    new_ind = tf.reduce_sum(idx*mult, 1)
-    return tf.gather(tf.reshape(values, [-1]), new_ind)
-
 def findRegions(x):
     with tf.variable_scope('size56'):
         x = stack(x, 1, 16, bottleneck=False, is_training=is_training, stride=1)
         x = block(x, 16, is_training, 2, bottleneck=False, _conv=deconv)
-        #x = upscale(x, out_features=512)
     with tf.variable_scope('size112'):
         x = stack(x, 1, 8, bottleneck=False, is_training=is_training, stride=1)
         x = block(x, 8, is_training, 2, bottleneck=False, _conv=deconv)
-        #x = upscale(x, out_features=128)
     with tf.variable_scope('size224'):
         x = stack(x, 1, 4, bottleneck=False, is_training=is_training, stride=1)
         x = block(x, 2, is_training, 1, bottleneck=False)
     return x
-
-def loss(y, batched_indices):
-    with tf.variable_scope('Loss calculation'):
-        old_shape = y.get_shape().as_list()
-        y = tf.reshape(tf.nn.softmax(tf.reshape(y, [old_shape[0], -1])), old_shape[:3])
-        y_nonzero = gather3D(batched_indices, y)
-        return -tf.reduce_sum(tf.log(y_nonzero))/old_shape[0]
-
 
 def getLastLayersFromGraph(graph):
     scale2 = graph.get_tensor_by_name('scale2/block3/Relu:0') / (10)
@@ -101,14 +73,6 @@ def depth_conv(x, filters_out):
         x_conv = _bn(x_conv, is_training)
         return resnet._relu(x_conv)
 
-
-def increaseToSpatialSize(x, out_filters=None, size=56):
-    B, N, M, C = x.get_shape().as_list()
-    with tf.variable_scope('size' + str(N)):
-        if out_filters is None:
-            out_filters = C
-        if N>=size: return block(x, out_filters, is_training, stride=1, bottleneck=False)
-        return increaseToSpatialSize(block(x, C, is_training, 2, bottleneck=False, _conv=deconv))
 
 def stichMutipleLayers(scales):
     with tf.variable_scope('Joining_layers'):
@@ -140,13 +104,16 @@ def restore_resnet_graph(sess):
     layers = 152
     new_saver = tf.train.import_meta_graph(meta_fn(layers))
     new_saver.restore(sess, checkpoint_fn(layers))
-    return tf.get_default_graph(), graph.get_tensor_by_name("images:0")
+    graph = tf.get_default_graph()
+    return graph, graph.get_tensor_by_name("images:0")
+
 
 def accuracy(softmax, label):
     y = tf.cast(tf.expand_dims(tf.argmax(softmax, 3), 3), tf.float32)
     return 1 - tf.reduce_mean(tf.abs(label - (1 - y)))
 
-def saveAndSummary(summary_op, step, sess):
+
+def makeSummary(summary_op, step, sess):
     summary_str = sess.run(summary_op, feed_dict={is_training: True, images: i, segmented_label: l})
     summary_writer.add_summary(summary_str, step)
 
@@ -195,38 +162,53 @@ def loadModelFromFile(load_dir):
             step = int(step_str) + 1
         return step
 
-if __name__=='__main__':
-    load_old = True
 
-    sess = tf.Session()
-    graph,images = restore_resnet_graph(sess)
-
-
-
+def inference(graph):
+    #Stich togheter different layers
     stiched = stichMutipleLayers(getLastLayersFromGraph(graph))
 
+    #Predict and upscale
     pred_region = findRegions(stiched)
     old_shape = pred_region.get_shape().as_list()
     softmaxed = tf.reshape(tf.nn.softmax(tf.reshape(pred_region, (-1, 2))), [-1] + old_shape[1:])
-
     tf.histogram_summary('pred_region', pred_region)
     tf.image_summary('predicted regions', tf.expand_dims(softmaxed[:, :, :, 0], 3))
+    return softmaxed
 
+
+def getAllFilenames():
+    global img_coco_names, seg_coco_names, img_coco_names2, seg_coco_names2, img_default_names, seg_default_names
     img_coco_names, seg_coco_names = getFilenamesForSegmentedCats('/usr/local/data/coco2014_cats/segmented_cats.txt',
                                                                   image_base_path='/usr/local/data/coco2014_cats/images/',
                                                                   segmentation_base_path='/usr/local/data/coco2014_cats/segmentations/')
     img_coco_names2, seg_coco_names2 = getFilenamesForSegmentedCats('/usr/local/data/coco2014_cats2/segmented_cats.txt',
-                                                                  image_base_path='/usr/local/data/coco2014_cats2/images/',
-                                                                  segmentation_base_path='/usr/local/data/coco2014_cats2/segmentations/')
-    img_default_names, seg_default_names = getFilenamesForSegmentedCats('cats_segmented_mixed.txt')
-    img, seg = getTrainingBatchForSegmentation(getProducerForFilenames(img_coco_names + img_coco_names2 + img_default_names,
-                                                                       seg_coco_names + seg_coco_names2 + seg_default_names), distort=True)
-    img_val, seg_val = getDataset('cats_segmented_val.txt', scope='retrieve_test_data', distort=False)
-    img_val2, seg_val2 = getDataset('val_segment.txt', scope='retrieve_test_data2', distort=False)
+                                                                    image_base_path='/usr/local/data/coco2014_cats2/images/',
+                                                                    segmentation_base_path='/usr/local/data/coco2014_cats2/segmentations/')
+    img_default_names, seg_default_names = getFilenamesForSegmentedCats('data/cats_segmented_mixed.txt')
 
-    segmented_label = tf.placeholder(tf.float32, (None, IMG_SIZE, IMG_SIZE, 1), 'segmented_label')
-    #segmented_label = loaded[0]
+
+    return (img_coco_names + img_coco_names2 + img_default_names), (seg_coco_names + seg_coco_names2 + seg_default_names)
+
+if __name__=='__main__':
+    load_old = True
+    train_dir = '/tmp/models/catnet12'
+    test_dir = '/tmp/models/catnet12_test'
+    load_dir = train_dir#'/tmp/models/catnet12'
+
+    #Setup data-collection graph
+    img_filenames, seg_filenames = getAllFilenames()
+    img, seg = getTrainingBatchForSegmentation(getProducerForFilenames(img_filenames, seg_filenames), distort=True)
+    img_val, seg_val = getDataset('data/cats_segmented_val.txt', scope='retrieve_test_data', distort=False)
+
+    #Load pretrained
+    sess = tf.Session()
+    graph,images = restore_resnet_graph(sess)
     tf.image_summary('images', images)
+
+    #placeholder for labels
+    segmented_label = tf.placeholder(tf.float32, (None, IMG_SIZE, IMG_SIZE, 1), 'segmented_label')
+
+    softmaxed = inference(graph)
 
     cross_entropy = segmentationLoss(softmaxed, segmented_label)
     tf.scalar_summary('cross_entropy', cross_entropy)
@@ -238,9 +220,8 @@ if __name__=='__main__':
     apply_avg_loss =  ema.apply([cross_entropy])
     loss_avg = ema.average(cross_entropy)
     tf.scalar_summary('loss_avg', loss_avg)
-    #train_step = tf.train.MomentumOptimizer(0.01, 0.9).minimize(cross_entropy)#, var_list=tf.trainable_variables()[-18:])
 
-    optimizer = tf.train.AdamOptimizer(0.0001)#.minimize(cross_entropy)#, var_list=tf.trainable_variables()[-18:])
+    optimizer = tf.train.AdamOptimizer(0.0001)
     grads = optimizer.compute_gradients(cross_entropy)
     apply_gradients = optimizer.apply_gradients(grads)
 
@@ -254,15 +235,10 @@ if __name__=='__main__':
 
 
     saver = tf.train.Saver(tf.all_variables(), max_to_keep=10, keep_checkpoint_every_n_hours=2)
-    #variables_without_batch_norm = filter(lambda x: x.name.find('moving_')==-1, tf.all_variables())
     summary_op = tf.merge_all_summaries()
 
     init = tf.initialize_all_variables()
     sess.run(init)
-
-    train_dir = '/tmp/models/catnet12'
-    test_dir = '/tmp/models/catnet12_test'
-    load_dir = train_dir#'/tmp/models/catnet12'
 
     if load_old:
         step = loadModelFromFile(load_dir)
@@ -275,31 +251,20 @@ if __name__=='__main__':
     test_writer = tf.train.SummaryWriter(test_dir,
                                             graph=sess.graph)
 
-
-    #findAvgVal(sess, img_val, seg_val)
-    #findAvgVal(sess, img_val2, seg_val2)
-
-    total_loss = 0
     avg_loss = 0
     cnt = 1
-    loss_validation = cross_entropy*10
-    tf.scalar_summary('validation_loss', loss_validation)
     for step in range(step, 100000):
         i, l = sess.run([img, seg])
         loss_val, _ = sess.run([cross_entropy, train_step], feed_dict={images: i, segmented_label: l, is_training: True})
 
         avg_loss += loss_val
-        total_loss += loss_val
-        print step, ':', loss_val, '\t', total_loss/cnt
+        print step, ':', loss_val, '\t', avg_loss/cnt
         cnt += 1
         if step % 100 == 0:
             total_loss = 0
             cnt = 1
             print 'Avg loss:', avg_loss / 100
             avg_loss = 0
-            saveAndSummary(summary_op, step, sess)
+            makeSummary(summary_op, step, sess)
         if step % 1000 == 0:
             saver.save(sess, train_dir + '/model.ckpt', global_step=step)
-
-    print l
-    plt.imshow(i)

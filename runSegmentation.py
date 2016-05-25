@@ -49,12 +49,12 @@ xv, yv = np.meshgrid(xrange, xrange)
 up_scale_y = 640/224.
 up_scale_x = 480/224.
 
-cat_list = []
+cat_list = range(100)
 
 cnt = 0
+def saveImages(img_list, name):
+    for i in range(len(img_list)): cv2.imwrite("cat_" + str(i) + ".jpg", img_list[i])
 while rval:
-    if cnt % 100:
-        cat_list = []
     print 'alpha:', alpha
     img = cv2.resize(frame, (224, 224))
     img = img.astype(np.float32)/255
@@ -75,7 +75,9 @@ while rval:
         else:
             catPlayer.pause()
 
-    cat_list.append(frame)
+    #FOR VIDEO
+    cat_list[cnt%100] = frame
+    cnt += 1
     cv2.imshow('cam', frame)
     rval, frame = cap.read()
     key = cv2.waitKey(1)
