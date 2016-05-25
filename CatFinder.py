@@ -6,14 +6,13 @@ import numpy as np
 
 class CatFinder:
 
-    def __init__(self):
+    def __init__(self, model_dir='/tmp/models/catnet12'):
         self.sess = tf.Session()
-        train_dir = '/tmp/models/catnet12'
 
-        ckpt = tf.train.get_checkpoint_state(train_dir)
+        ckpt = tf.train.get_checkpoint_state(model_dir)
         model_checkpoint_path = ckpt.model_checkpoint_path.split('/')[-1]
         if not os.path.isabs(model_checkpoint_path):
-            model_checkpoint_path = os.path.join(train_dir, model_checkpoint_path)
+            model_checkpoint_path = os.path.join(model_dir, model_checkpoint_path)
         saver = tf.train.import_meta_graph(model_checkpoint_path + '.meta')
         saver.restore(self.sess, model_checkpoint_path)
         step_str = model_checkpoint_path.split('/')[-1].split('-')[-1]
