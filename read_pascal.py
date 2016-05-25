@@ -76,10 +76,11 @@ def findRegions(x):
     return x
 
 def loss(y, batched_indices):
-    old_shape = y.get_shape().as_list()
-    y = tf.reshape(tf.nn.softmax(tf.reshape(y, [old_shape[0], -1])), old_shape[:3])
-    y_nonzero = gather3D(batched_indices, y)
-    return -tf.reduce_sum(tf.log(y_nonzero))/old_shape[0]
+    with tf.variable_scope('Loss calculation'):
+        old_shape = y.get_shape().as_list()
+        y = tf.reshape(tf.nn.softmax(tf.reshape(y, [old_shape[0], -1])), old_shape[:3])
+        y_nonzero = gather3D(batched_indices, y)
+        return -tf.reduce_sum(tf.log(y_nonzero))/old_shape[0]
 
 
 def getLastLayersFromGraph(graph):
@@ -113,20 +114,20 @@ def stichMutipleLayers(scales):
     with tf.variable_scope('Joining_layers'):
         scale2, scale3, scale4, scale5 = scales
         with tf.variable_scope('up2'):
-            scale2 = depth_conv(_bn(scale2, is_training), 32)
+            scale2 = depth_conv(scale2, 32)
             up2 = block(scale2, 8, is_training, stride=1, bottleneck=False)
         with tf.variable_scope('up3'):
-            scale3 = depth_conv(_bn(scale3, is_training), 32)
+            scale3 = depth_conv(scale3, 32)
             up3 = block(scale3, 8, is_training, stride=2, bottleneck=False, _conv=deconv)
         with tf.variable_scope('up4'):
             with tf.variable_scope('a'):
-                scale4 = depth_conv(_bn(scale4, is_training), 32)
+                scale4 = depth_conv(scale4, 32)
                 up4 = block(scale4, 8, is_training, stride=2, bottleneck=False, _conv=deconv)
             with tf.variable_scope('b'):
                 up4 = block(up4, 8, is_training, stride=2, bottleneck=False, _conv=deconv)
         with tf.variable_scope('up5'):
             with tf.variable_scope('a'):
-                scale5 = depth_conv(_bn(scale5, is_training), 32)
+                scale5 = depth_conv(scale5, 32)
                 up5 = block(scale5, 8, is_training, stride=2, bottleneck=False, _conv=deconv)
             with tf.variable_scope('b'):
                 up5 = block(up5, 8, is_training, stride=2, bottleneck=False, _conv=deconv)
@@ -184,6 +185,7 @@ img_default_names, seg_default_names = getFilenamesForSegmentedCats('cats_segmen
 img, seg = getTrainingBatchForSegmentation(getProducerForFilenames(img_coco_names + img_coco_names2 + img_default_names,
                                                                    seg_coco_names + seg_coco_names2 + seg_default_names), distort=True)
 img_val, seg_val = getDataset('cats_segmented_val.txt', scope='retrieve_test_data', distort=False)
+img_val2, seg_val2 = getDataset('val_segment.txt', scope='retrieve_test_data2', distort=False)
 
 segmented_label = tf.placeholder(tf.float32, (None, IMG_SIZE, IMG_SIZE, 1), 'segmented_label')
 #segmented_label = loaded[0]
@@ -200,8 +202,8 @@ apply_avg_loss =  ema.apply([cross_entropy])
 loss_avg = ema.average(cross_entropy)
 tf.scalar_summary('loss_avg', loss_avg)
 #train_step = tf.train.MomentumOptimizer(0.01, 0.9).minimize(cross_entropy)#, var_list=tf.trainable_variables()[-18:])
-lr = tf.placeholder(dtype=tf.bool, name='learning_rate')
-optimizer = tf.train.AdamOptimizer(lr)#.minimize(cross_entropy)#, var_list=tf.trainable_variables()[-18:])
+
+optimizer = tf.train.AdamOptimizer(0.0001)#.minimize(cross_entropy)#, var_list=tf.trainable_variables()[-18:])
 grads = optimizer.compute_gradients(cross_entropy)
 apply_gradients = optimizer.apply_gradients(grads)
 
@@ -221,9 +223,9 @@ summary_op = tf.merge_all_summaries()
 init = tf.initialize_all_variables()
 sess.run(init)
 
-train_dir = '/tmp/models/catnet10'
-test_dir = '/tmp/models/catnet10_test'
-load_dir = train_dir# '/tmp/models/catnet8'
+train_dir = '/tmp/models/catnet12'
+test_dir = '/tmp/models/catnet12_test'
+load_dir = train_dir#'/tmp/models/catnet12'
 
 step = 1
 load_old = True
@@ -265,15 +267,35 @@ def saveAndSummary(summary_op, step, sess):
     print 'Validate loss:', loss_val2, 'Validate acc', acc_val
 
 
+def findAvgVal(sess, img_val, seg_val):
+    from sklearn.metrics import average_precision_score
+    avg_acc = 0
+    sm_avg = 0
+    for i in range(1, 101):
+        i_val, l_val = sess.run([img_val, seg_val])
+
+        sm, acc_val = sess.run([softmaxed, acc],
+                                                    feed_dict={images: i_val, segmented_label: l_val,
+                                                               is_training: False})
+        sm_cat = sm[:, :, :, 0]
+        precision = average_precision_score(l_val.ravel(), sm_cat.ravel())
+        sm_avg += precision
+        avg_acc += acc_val
+
+        print acc_val,  avg_acc/i, precision, sm_avg
+    print "AVG", avg_acc/100, sm_avg/100
+
+#findAvgVal(sess, img_val, seg_val)
+#findAvgVal(sess, img_val2, seg_val2)
+
 total_loss = 0
-lr_val = 0.00001
 avg_loss = 0
 cnt = 1
 loss_validation = cross_entropy*10
 tf.scalar_summary('validation_loss', loss_validation)
 for step in range(step, 100000):
     i, l = sess.run([img, seg])
-    loss_val, _ = sess.run([cross_entropy, train_step], feed_dict={images: i, segmented_label: l, is_training: True, lr: lr_val})
+    loss_val, _ = sess.run([cross_entropy, train_step], feed_dict={images: i, segmented_label: l, is_training: True})
 
     avg_loss += loss_val
     total_loss += loss_val
