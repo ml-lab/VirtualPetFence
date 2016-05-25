@@ -10,5 +10,6 @@ Her er oversikten over de viktige filene:
 
 *train_catnet.py* Her trener man modellen
 
-*runSegmentation.py* Dette er filen en bruker kjører. Den laster inn modellen (tar tid), og man får et GUI for å tegne
+*runSegmentation.py* Dette er filen en bruker kjører. CatFinder må initisaliseres med stien til der model filene ligger
+ (checkpoint, model og model-meta). Den laster inn modellen (tar tid), og man får et GUI for å tegne
 og se hva som foregår. Den spiller også av en lyd, hvis den finner en katt i området.

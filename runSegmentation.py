@@ -42,7 +42,7 @@ cap = cv2.VideoCapture(0)
 rval, frame = cap.read()
 
 
-catFinder = CatFinder()
+catFinder = CatFinder('/tmp/models/catnet12')
 xrange = np.arange(224)
 xv, yv = np.meshgrid(xrange, xrange)
 
