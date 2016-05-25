@@ -261,7 +261,6 @@ if __name__=='__main__':
         print step, ':', loss_val, '\t', avg_loss/cnt
         cnt += 1
         if step % 100 == 0:
-            total_loss = 0
             cnt = 1
             print 'Avg loss:', avg_loss / 100
             avg_loss = 0
