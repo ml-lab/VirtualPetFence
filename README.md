@@ -10,8 +10,11 @@ I tillegg kommer avhengighetene numpy og OpenCV
 
 For å få treningen av nettverket til å fungere må "pathene" til treningsdata være riktig. Get dataset tar inn
 
-Fortrente modeller kan lastes ned på: https://drive.google.com/open?id=0B8EJ9UWrW_JRQ0RZWEJIMGVRTUU
+Fortrente modell kan lastes ned på: https://drive.google.com/open?id=0B8EJ9UWrW_JRQ0RZWEJIMGVRTUU
 
+For å trene egene modeller må man ha en fortrent ResNet-ImageNet modell:
+En ferdig konvertert (til tensorflow) modell kan lastes ned fra https://github.com/ry/tensorflow-resnet (ikke sikker på at dette fungerer)
+Eller du kan konvertere caffe modellen selv ved å laste ned den fra https://github.com/KaimingHe/deep-residual-networks og så kjøre convert.py
 
 ## Her er oversikten over de viktige filene:
 
