@@ -2,7 +2,7 @@ import os
 
 import numpy as np
 import tensorflow as tf
-
+import matplotlib.pyplot as plt
 import resnet
 from read_data import getDataset, getTestBatchWithNoSegmentation, getFilenamesForSegmentedCats, \
     getTrainingBatchForSegmentation, getProducerForFilenames
@@ -140,7 +140,7 @@ def findAvgVal(sess, img_val, seg_val):
         sm_avg += precision
         avg_acc += acc_val
 
-        print acc_val,  avg_acc/i, precision, sm_avg
+        print acc_val,  avg_acc/i, precision, sm_avg/i
     print "AVG", avg_acc/100, sm_avg/100
 
 
@@ -160,7 +160,7 @@ def loadModelFromFile(load_dir):
               (ckpt.model_checkpoint_path, step_str))
         if train_dir == load_dir:
             step = int(step_str) + 1
-        return step
+    return step
 
 
 def inference(graph):
@@ -191,20 +191,24 @@ def getAllFilenames():
 
 if __name__=='__main__':
     load_old = True
-    train_dir = '/tmp/models/catnet12'
-    test_dir = '/tmp/models/catnet12_test'
+    train_dir = '/tmp/models/catnet1'
+    test_dir = '/tmp/models/catnet1_test'
     load_dir = train_dir#'/tmp/models/catnet12'
 
     #Setup data-collection graph
-    img_filenames, seg_filenames = getAllFilenames()
-    img, seg = getTrainingBatchForSegmentation(getProducerForFilenames(img_filenames, seg_filenames), distort=True)
-    img_val, seg_val = getDataset('data/cats_segmented_val.txt', scope='retrieve_test_data', distort=False)
 
     #Load pretrained
     sess = tf.Session()
     graph,images = restore_resnet_graph(sess)
+    resnet_vars = tf.all_variables()
+    prob = graph.get_tensor_by_name('prob:0')
     tf.image_summary('images', images)
 
+    resnet.UPDATE_OPS_COLLECTION = 'new_update_collection'
+
+    img_filenames, seg_filenames = getAllFilenames()
+    img, seg = getTrainingBatchForSegmentation(getProducerForFilenames(img_filenames, seg_filenames), distort=True)
+    img_val, seg_val = getDataset('data/cats_segmented_val.txt', scope='retrieve_test_data', distort=False)
     #placeholder for labels
     segmented_label = tf.placeholder(tf.float32, (None, IMG_SIZE, IMG_SIZE, 1), 'segmented_label')
 
@@ -237,7 +241,7 @@ if __name__=='__main__':
     saver = tf.train.Saver(tf.all_variables(), max_to_keep=10, keep_checkpoint_every_n_hours=2)
     summary_op = tf.merge_all_summaries()
 
-    init = tf.initialize_all_variables()
+    init = tf.initialize_variables(filter(lambda x: x not in resnet_vars, tf.all_variables())) #tf.initialize_all_variables()
     sess.run(init)
 
     if load_old:

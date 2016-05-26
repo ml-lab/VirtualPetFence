@@ -21,7 +21,7 @@ class DrawArea():
                     cv2.rectangle(self.img, (self.ix, self.iy), (x, y), (0, 255, 0), -1)
                 else:
                     cv2.circle(self.img, (x, y), 5, (0, 0, 255), -1)
-                cv2.imshow('image', self.img)
+                cv2.imshow('cam', self.img)
 
         elif event == cv2.EVENT_LBUTTONUP:
             self.drawing = False
